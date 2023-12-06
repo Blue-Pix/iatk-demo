@@ -1,0 +1,125 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Globals:
+  Function:
+    Timeout: 3
+    Tracing: Active
+  Api:
+    TracingEnabled: true
+Resources:
+  OrderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: order/
+      Handler: app.lambda_handler
+      Runtime: python3.11
+      Architectures:
+        - x86_64
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref OrdersTable
+        - EventBridgePutEventsPolicy:
+            EventBusName: default
+      Events:
+        CreateOrder:
+          Type: Api
+          Properties:
+            Path: /
+            Method: post
+  ShippingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: shipping/
+      Handler: app.lambda_handler
+      Runtime: python3.11
+      Architectures:
+        - x86_64
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref OrdersTable 
+  PrepareShippingEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventBusName: default
+      EventPattern:
+        source:
+          - iatk_demo.order_service
+        detail-type:
+          - order_created
+      State: ENABLED
+      Targets: 
+        - Id: ShippingFunction
+          Arn: !GetAtt ShippingFunction.Arn
+  PrepareShippingEventRulePermission:
+    Type: AWS::Lambda::Permission
+    Properties: 
+      FunctionName: !Ref ShippingFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt PrepareShippingEventRule.Arn
+  CustomEventRegistry:
+    Type: AWS::EventSchemas::Registry
+    Properties:
+      Description: Event schema registry for this demo
+  CreateOrderEventSchema:
+    Type: AWS::EventSchemas::Schema
+    Properties:
+      RegistryName: !GetAtt CustomEventRegistry.RegistryName
+      SchemaName: CreateOrderEventSchema
+      Description: 'Event used to trigger shipping function'
+      Type: JSONSchemaDraft4
+      Content: >
+        {
+          "$schema": "http://json-schema.org/draft-04/schema#",
+          "type": "object",
+          "properties": {
+            "order_id": {
+              "type": "string"
+            },
+            "amount": {
+              "type": "integer"
+            },
+            "order_status": {
+              "type": "string",
+              "default": "N/A",
+              "enum": [
+                "N/A",
+                "created",
+                "shipped",
+                "delivered"
+              ]
+            }
+          },
+          "required": [
+            "order_id",
+            "amount",
+            "order_status"
+          ]
+        }
+
+  OrdersTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      PrimaryKey:
+        Name: order_id
+        Type: String
+      TableName: orders
+Outputs:
+  OrderApi:
+    Description: API Gateway endpoint URL for Prod stage for Order function
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/"
+  OrderFunction:
+    Description: Order Lambda Function Name
+    Value: !Ref OrderFunction
+  ShippingFunction:
+    Description: Shipping Lambda Function Name
+    Value: !Ref ShippingFunction
+  PrepareShippingEventRule:
+    Description: EventBridge rule to trigger ShippingFunction
+    Value: !Ref PrepareShippingEventRule
+  CustomEventRegistry:
+    Description: Custom event schema registry
+    Value: !GetAtt CustomEventRegistry.RegistryName
+  CreateOrderEventSchema:
+    Description: Create order event schema name
+    Value: !GetAtt CreateOrderEventSchema.SchemaName
